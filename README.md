@@ -253,73 +253,69 @@ FrameHistory는 매 틱마다 FFramePackage를 저장하므로 피격된 시간�
 찾은 노드의 시간대가 상대 플레이어를 명중시킨 시간대와 같다면 찾은 FFramePackage를 반환하고 그렇지 않다면 InterpBetweenFrames를 통해 두 개의 FFramePackage 사이를 비율에 따라 보간하여 반환합니다.</br>
 
 ```
-FServerSideRewindResult ULagCompensationComponent::ConfirmHit(const FFramePackage& Package, ABlasterCharacter* HitCharacter, const FVector_NetQuantize& TraceStart, const FVector_NetQuantize& HitLocation)
+FFramePackage CurrentFrame;
+for (auto& HitBoxPair : HitCharacter->HitCollisionBoxes)
 {
-	// 이전 프레임의 피격자 히트 박스를 가져오기 전에 현재 프레임의 히트박스를 따로 저장
-	FFramePackage CurrentFrame;
-	CacheBoxPositions(HitCharacter, CurrentFrame);
-	MoveBoxes(HitCharacter, Package);
+	FBoxInformation BoxInfo;
+	BoxInfo.Location = HitBoxPair.Value->GetComponentLocation();
+	BoxInfo.Rotation = HitBoxPair.Value->GetComponentRotation();
+	CurrentFramePackage.HitBoxInfo.Add(HitBoxPair.Key, BoxInfo);
+}
 
-	// 히트 박스에 대한 콜리전만 상관쓰기 위해 메쉬 콜리전은 끊다.
-	EnableCharacterMeshCollision(HitCharacter, ECollisionEnabled::NoCollision);
-	
-	UBoxComponent* HeadBox = HitCharacter->HitCollisionBoxes[FName("head")];
-	HeadBox->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-	HeadBox->SetCollisionResponseToChannel(ECC_HitBox, ECollisionResponse::ECR_Block);
-	
-	FHitResult ConfirmHitResult;
-	const FVector TraceEnd = TraceStart + (HitLocation - TraceStart) * 1.25f;
-
-	UWorld* World = GetWorld();
-	if (World)
-	{
-		World->LineTraceSingleByChannel(
-			ConfirmHitResult,
-			TraceStart,
-			TraceEnd,
-			ECC_HitBox
-		);
-
-		if (ConfirmHitResult.bBlockingHit)
-		{
-			ResetHitBoxes(HitCharacter, CurrentFrame);
-			EnableCharacterMeshCollision(HitCharacter, ECollisionEnabled::QueryAndPhysics);
-			
-			return FServerSideRewindResult{ true, true };
-		}
-		else 
-		{
-			for (auto& HitBoxPair : HitCharacter->HitCollisionBoxes)
-			{
-				if (HitBoxPair.Value != nullptr)
-				{
-					HitBoxPair.Value->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-					HitBoxPair.Value->SetCollisionResponseToChannel(ECC_HitBox, ECollisionResponse::ECR_Block);
-				}
-			}
-
-			World->LineTraceSingleByChannel(
-				ConfirmHitResult,
-				TraceStart,
-				TraceEnd,
-				ECC_HitBox
-			);
-
-			if (ConfirmHitResult.bBlockingHit)
-			{
-				ResetHitBoxes(HitCharacter, CurrentFrame);
-				EnableCharacterMeshCollision(HitCharacter, ECollisionEnabled::QueryAndPhysics);
-				
-				return FServerSideRewindResult{ true, false };
-			}
-		}
-	}
-
-	ResetHitBoxes(HitCharacter, CurrentFrame);
-	EnableCharacterMeshCollision(HitCharacter, ECollisionEnabled::QueryAndPhysics);
-	return FServerSideRewindResult{ false, false };
+for (auto& HitBoxPair : HitCharacter->HitCollisionBoxes)
+{
+	HitBoxPair.Value->SetWorldLocation(Package.HitBoxInfo[HitBoxPair.Key].Location);
+	HitBoxPair.Value->SetWorldRotation(Package.HitBoxInfo[HitBoxPair.Key].Rotation);
 }
 ```
 
-피격된 시간대의 FFramePackage를 구한 후에는 ConfirmHit 함수를 호출해 피격자의 히트박스를 맞았는지 라인트레이싱을 진행합니다.</br>
-ConfirmHit는 4가지 절차인 현재 피격자의 히트박스 저장, 과거 피격자의 피트박스 세팅, 라인트레이싱 확인, 확인 후 피격자의 히트박스 복구를 진행합니다.</br>
+피격된 시간대의 FFramePackage를 구한 후에는 ConfirmHit 함수를 호출해 피격자의 히트박스에 맞았는지 라인트레이싱을 진행합니다.</br>
+라인 트레이싱을 진행하기 전에 우선 현재 피격자의 히트 박스의 정보를 저장하고 과거 시간의 FFramePacakge의 정보를 토대로 히트박스를 이동시킵니다.</br>
+첫번째 for문은 피격자인 HitCharacter의 현재 히트 박스를 CurrentFrame에 저장하고, 두번째 for문은 GetFrameToCheck에서 구한 피격 시간대의 FramePackage의 정보를 토대로 피격자의 히트박스를 세팅하고 있습니다.</br>
+
+```
+World->LineTraceSingleByChannel(
+	ConfirmHitResult,
+	TraceStart,
+	TraceEnd,
+	ECC_HitBox
+);
+
+if (ConfirmHitResult.bBlockingHit)
+{
+	ResetHitBoxes(HitCharacter, CurrentFrame);
+	EnableCharacterMeshCollision(HitCharacter, ECollisionEnabled::QueryAndPhysics);
+	
+	return FServerSideRewindResult{ true, true };
+}
+else 
+{
+	for (auto& HitBoxPair : HitCharacter->HitCollisionBoxes)
+	{
+		HitBoxPair.Value->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		HitBoxPair.Value->SetCollisionResponseToChannel(ECC_HitBox, ECollisionResponse::ECR_Block);
+	}
+
+	World->LineTraceSingleByChannel(
+		ConfirmHitResult,
+		TraceStart,
+		TraceEnd,
+		ECC_HitBox
+	);
+
+	if (ConfirmHitResult.bBlockingHit)
+	{
+		ResetHitBoxes(HitCharacter, CurrentFrame);
+		EnableCharacterMeshCollision(HitCharacter, ECollisionEnabled::QueryAndPhysics);
+		
+		return FServerSideRewindResult{ true, false };
+	}
+}
+```
+
+피격 위치가 머리 히트박스에 맞았는지 체크하기 위해 피격자 캐릭터의 Mesh콜리전을 해제하고 머리 히트박스의 콜리전만 활성화시켜 먼저 라인트레이싱을 진행합니다.</br>
+if문의 ConfirmHitResult.bBlockingHit조건에 만족한다면 머리 히트박스만 콜리전을 활성화시켰기때문에 헤드샷으로 판정내리기 위해 FServerSideRewindResult에 bHeadShot값으로 true와 bHitConfirmed값으로 true를 리턴해줬습니다.</br>
+만약 if문의 조건에 만족하지 않으면 머리에 맞지 않았으므로 나머지 히트박스의 콜리전을 활성화시켜 라인 트레이싱을 한 번 더 진행했습니다.</br>
+다시 진행한 라인 트레이싱에서 bBlockingHit이 true라면 머리에 맞지 않고 몸에 맞은 샷이므로 false와 true값을 반환했습니다.</br>
+명중 판정이 끝났다면 과거 시간대에 있는 피격자의 히트박스를 SetWorldLocation와 SetWorldRotation을 통해 다시 현재 시간대의 위치와 회전으로 복구시켰습니다.</br>
+서버측 재조정을 통해 얻은 결과값을 FServerSideRewindReuslt을 통해 서버는 ApplyDamage를 실행하고 헤드샷이면 헤드샷 데미지를, 그게 아니라면 일반 데미지를 ApplyDamage에 적용했습니다.</br>
