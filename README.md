@@ -183,37 +183,21 @@ FireTimer는 총기가 가지고 있는 연사 딜레이 시간에 따라 bCanFi
 서버 유저가 아닌 클라이언트 유저가 격발 버튼을 누르면 즉시 격발 애니메이션이 재생되도록하고 다른 클라이언트나 서버 환경에서는 RPC를 통해 격발 애니메이션이 출력되도록 하여 핑이 높은 상황에서도 격발 키를 누르면 자신의 화면에서는 바로 애니메이션이 재생됩니다.</BR>
 격발한 클라이언트를 제외한 나머지 플레이어들은 ServerFire RPC를 통해 서버 환경에서 멀티캐스트 RPC인 MulticastFire를 호출하고 서버와 클라이언트 모두의 환경에서 플레이어가 격발을 한 모습을 볼 수 있게 했습니다.</br>
 격발 후 데미지 처리는 Weapon클래스의 Fire함수가 담당하며 데미지는 서버 환경에서 총구위치와 HitTarget을 라인트레이싱한 후 플레이어한테 명중했다면 데미지를 적용시킵니다.</br>
-리슨 서버 유저면 라인트레이싱 결과를 토대로 바로 ApplyDamage를 실행해 피격자한테 데미지를 주지만, 클라이언트 유저면 ServerScoreRequest를 통해 서버환경에서 서버측 재조정을 통해 라인 트레이싱을 진행하게 됩니다.</br></br>
+리슨 서버 유저면 라인트레이싱 결과를 토대로 바로 ApplyDamage를 실행해 피격자한테 데미지를 주지만, 클라이언트 유저면 ServerScoreRequest RPC를 통해 서버환경에서 서버측 재조정를 거쳐 라인 트레이싱을 진행하게 됩니다.</br></br>
 
 ### [서버측 재조정]
 
 ```
 void ULagCompensationComponent::SaveFramePackage()
 {
-	if (FrameHistory.Num() <= 1)
+	float HistoryLength = FrameHistory.GetHead()->GetValue().Time - FrameHistory.GetTail()->GetValue().Time;
+	while (HistoryLength > MaxRecordTime)
 	{
-		FFramePackage ThisFramePackage;
-		SaveFramePackage(ThisFramePackage);
-		FrameHistory.AddHead(ThisFramePackage);
+		FrameHistory.RemoveNode(FrameHistory.GetTail());
+		HistoryLength = FrameHistory.GetHead()->GetValue().Time - FrameHistory.GetTail()->GetValue().Time;
 	}
-	else
-	{
-		float HistoryLength = FrameHistory.GetHead()->GetValue().Time - FrameHistory.GetTail()->GetValue().Time;
 
-		while (HistoryLength > MaxRecordTime)
-		{
-			FrameHistory.RemoveNode(FrameHistory.GetTail());
-			HistoryLength = FrameHistory.GetHead()->GetValue().Time - FrameHistory.GetTail()->GetValue().Time;
-		}
-
-		FFramePackage ThisFramePackage;
-		SaveFramePackage(ThisFramePackage);
-		FrameHistory.AddHead(ThisFramePackage);
-	}
-}
-
-void ULagCompensationComponent::SaveFramePackage(FFramePackage& Package)
-{
+	FFramePackage Package;
 	Package.Time = GetWorld()->GetTimeSeconds();
 	for (auto& BoxPair : Character->HitCollisionBoxes)
 	{
@@ -224,3 +208,118 @@ void ULagCompensationComponent::SaveFramePackage(FFramePackage& Package)
 	}
 }
 ```
+SaveFramePackage는 서버측 재조정을 할 때 사용할 과거 시간대의 플레이어 히트박스를 저장하는 역할을 하는 함수입니다.</br>
+FFramePackage는 히트박스를 저장한 시간대와 플레이어 히트박스를 갖는 구조체이며 매 틱마다 새로운 FFRamePackage를 저장하기 위해 연결리스트를 이용해 FrameHistory를 만들었습니다.</br>
+FrameHistory에 저장된 시간이 서버측 재조정에 사용할 시간인 MaxRecordTime보다 길다면 뒤에서부터 오래된 노드를 삭제하고 새로운 시간대의 FFramePackage를 저장합니다.</br>
+새로운 시간대의 FrameHistory 노드를 저장시 FFramePackage에 현재 틱의 시간과 플레이어가 갖고 있는 히트박스를 순회하여 모든 히트박스의 위치와 회전을 기록합니다.</br></br>
+
+
+```
+FFramePackage ULagCompensationComponent::GetFrameToCheck(ABlasterCharacter* HitCharacter, float HitTime)
+{
+	const TDoubleLinkedList<FFramePackage>& History = HitCharacter->GetLagCompensation()->FrameHistory;
+
+	TDoubleLinkedList<FFramePackage>::TDoubleLinkedListNode* Younger = History.GetHead();
+	TDoubleLinkedList<FFramePackage>::TDoubleLinkedListNode* Older = Younger;
+	while (Older->GetValue().Time > HitTime)
+	{
+		if (Older->GetNextNode() == nullptr) break;
+
+		Older = Older->GetNextNode();
+		if (Older->GetValue().Time > HitTime)
+		{
+			Younger = Older;
+		}
+	}
+
+	if (Older->GetValue().Time == HitTime)
+	{
+		FrameToCheck = Older->GetValue();
+		bShouldInterpolate = false;
+	}
+
+	if (bShouldInterpolate)
+	{
+		FrameToCheck = InterpBetweenFrames(Older->GetValue(), Younger->GetValue(), HitTime);
+	}
+
+	return FrameToCheck;
+}
+```
+GetFrameToCheck는 클라이언트 환경에서 격발을 해 Weapon 클래스의 Fire을 호출하게 될 시 ServerScoreRequest RPC가 제일 먼저 실행하는 함수로 되돌린 시간대에 있는 피격자의 히트박스를 가져옵니다.</br>
+History 변수는 피격자의 FFramePackage가 저장된 연결리스트인 FrameHistory로 지난 시간대의 히트박스가 저장되어 있습니다.</br>
+FrameHistory는 매 틱마다 FFramePackage를 저장하므로 피격된 시간대랑 저장된 시간대가 일치할 확률이 적으며 일치하지 않을 경우 히트 박스의 위치와 회전을 보간해줘야합니다.</br>
+우선 격발한 플레이어가 상대 플레이어를 명중시킨 시간대가 어느 FFramePacakge 사이에 있는지 찾기 위해 While문을 통해 명중시킨 시간대의 바로 앞과 뒤의 노드를 찾습니다.</br>
+찾은 노드의 시간대가 상대 플레이어를 명중시킨 시간대와 같다면 찾은 FFramePackage를 반환하고 그렇지 않다면 InterpBetweenFrames를 통해 두 개의 FFramePackage 사이를 비율에 따라 보간하여 반환합니다.</br>
+
+```
+FServerSideRewindResult ULagCompensationComponent::ConfirmHit(const FFramePackage& Package, ABlasterCharacter* HitCharacter, const FVector_NetQuantize& TraceStart, const FVector_NetQuantize& HitLocation)
+{
+	// 이전 프레임의 피격자 히트 박스를 가져오기 전에 현재 프레임의 히트박스를 따로 저장
+	FFramePackage CurrentFrame;
+	CacheBoxPositions(HitCharacter, CurrentFrame);
+	MoveBoxes(HitCharacter, Package);
+
+	// 히트 박스에 대한 콜리전만 상관쓰기 위해 메쉬 콜리전은 끊다.
+	EnableCharacterMeshCollision(HitCharacter, ECollisionEnabled::NoCollision);
+	
+	UBoxComponent* HeadBox = HitCharacter->HitCollisionBoxes[FName("head")];
+	HeadBox->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	HeadBox->SetCollisionResponseToChannel(ECC_HitBox, ECollisionResponse::ECR_Block);
+	
+	FHitResult ConfirmHitResult;
+	const FVector TraceEnd = TraceStart + (HitLocation - TraceStart) * 1.25f;
+
+	UWorld* World = GetWorld();
+	if (World)
+	{
+		World->LineTraceSingleByChannel(
+			ConfirmHitResult,
+			TraceStart,
+			TraceEnd,
+			ECC_HitBox
+		);
+
+		if (ConfirmHitResult.bBlockingHit)
+		{
+			ResetHitBoxes(HitCharacter, CurrentFrame);
+			EnableCharacterMeshCollision(HitCharacter, ECollisionEnabled::QueryAndPhysics);
+			
+			return FServerSideRewindResult{ true, true };
+		}
+		else 
+		{
+			for (auto& HitBoxPair : HitCharacter->HitCollisionBoxes)
+			{
+				if (HitBoxPair.Value != nullptr)
+				{
+					HitBoxPair.Value->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+					HitBoxPair.Value->SetCollisionResponseToChannel(ECC_HitBox, ECollisionResponse::ECR_Block);
+				}
+			}
+
+			World->LineTraceSingleByChannel(
+				ConfirmHitResult,
+				TraceStart,
+				TraceEnd,
+				ECC_HitBox
+			);
+
+			if (ConfirmHitResult.bBlockingHit)
+			{
+				ResetHitBoxes(HitCharacter, CurrentFrame);
+				EnableCharacterMeshCollision(HitCharacter, ECollisionEnabled::QueryAndPhysics);
+				
+				return FServerSideRewindResult{ true, false };
+			}
+		}
+	}
+
+	ResetHitBoxes(HitCharacter, CurrentFrame);
+	EnableCharacterMeshCollision(HitCharacter, ECollisionEnabled::QueryAndPhysics);
+	return FServerSideRewindResult{ false, false };
+}
+```
+
+피격된 시간대의 FFramePackage를 구한 후에는 ConfirmHit 함수를 호출해 피격자의 히트박스를 맞았는지 라인트레이싱을 진행합니다.</br>
+ConfirmHit는 4가지 절차인 현재 피격자의 히트박스 저장, 과거 피격자의 피트박스 세팅, 라인트레이싱 확인, 확인 후 피격자의 히트박스 복구를 진행합니다.</br>
