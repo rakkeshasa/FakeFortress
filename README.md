@@ -318,4 +318,98 @@ if문의 ConfirmHitResult.bBlockingHit조건에 만족한다면 머리 히트박
 만약 if문의 조건에 만족하지 않으면 머리에 맞지 않았으므로 나머지 히트박스의 콜리전을 활성화시켜 라인 트레이싱을 한 번 더 진행했습니다.</br>
 다시 진행한 라인 트레이싱에서 bBlockingHit이 true라면 머리에 맞지 않고 몸에 맞은 샷이므로 false와 true값을 반환했습니다.</br>
 명중 판정이 끝났다면 과거 시간대에 있는 피격자의 히트박스를 SetWorldLocation와 SetWorldRotation을 통해 다시 현재 시간대의 위치와 회전으로 복구시켰습니다.</br>
-서버측 재조정을 통해 얻은 결과값을 FServerSideRewindReuslt을 통해 서버는 ApplyDamage를 실행하고 헤드샷이면 헤드샷 데미지를, 그게 아니라면 일반 데미지를 ApplyDamage에 적용했습니다.</br>
+서버측 재조정을 통해 얻은 결과값을 FServerSideRewindReuslt을 통해 서버는 ApplyDamage를 실행하고 헤드샷이면 헤드샷 데미지를, 그게 아니라면 일반 데미지를 ApplyDamage에 적용했습니다.</br></br>
+
+```
+if (PlayerState)
+{
+	if (PlayerState->GetPing() * 4 > HighPingThreshold)
+	{
+		HighPingWarning();
+		ServerReportPingStatus(true);
+	}
+	else
+	{
+		ServerReportPingStatus(false);
+	}
+}
+```
+높은 핑으로 인해 지연이 너무 오래 될시 서버측 재조정은 공격자에게 좋은 플레이 경험을 주지 않기 때문에 일정 핑보다 높다면 서버측 재조정을 사용하지 않게 해주도록 했습니다.</BR>
+PlayerController에서 매 틱마다 PlayerState를 통해 핑을 체크하고 HighPingThreshold보다 높다면 경고 화면과 ServerReportPingStatus를 통해 bool값을 브로드캐스트 했습니다.</br>
+브로드 캐스트 해주는 HighPingDelegate 델리게이트는 무기를 장착할 때 바인딩해주고 무기를 바닥에 떨어뜨리면 해제시키도록 설계했습니다.</br>
+HighPingDelegate를 통해 콜백되는 함수에서는 bool값에 따라 무기 옵션인 bUseServerSideRewind의 값을 세팅해 현재 네트워크 환경에 따라 서버측 재조정을 사용할지 결정했습니다.</br></br>
+
+### [클라이언트측 예측]
+지연 시간이 긴 환경에서 총을 격발한 후에 HUD에서 남은 총알의 수가 클라이언트 환경에 맞게 줄었다가 아직 서버환경에서 복제되지 않아 늘어나는 문제가 있었습니다.</BR>
+또한 남은 총알의 수가 늦게 복제되면서 총알을 다 소모하면 Reload함수를 호출해야하는데 정상적으로 호출되지 않아 자동재장전이 되지 않았습니다.</br>
+이를 해결하기 위해서 더 이상 총알 수를 담당했던 Ammo 변수를 복제 속성으로 두지 않고 클라이언트에서 직접 Ammo를 소모하고 모든 Ammo가 소진 시 바로 Reload가 실행되도록 했습니다.</br>
+
+```
+void AWeapon::SpendAmmo()
+{
+	Ammo = FMath::Clamp(Ammo - 1, 0, MagCapacity);
+	SetHUDAmmo();
+
+	if (HasAuthority())
+	{
+		ClientUpdateAmmo(Ammo);
+	}
+	else if (BlasterOwnerCharacter && BlasterOwnerCharacter->IsLocallyControlled())
+	{
+		++Sequence;
+	}
+}
+
+void AWeapon::ClientUpdateAmmo_Implementation(int32 ServerAmmo)
+{
+	if (HasAuthority()) return;
+
+	Ammo = ServerAmmo;
+	--Sequence;
+
+	Ammo -= Sequence;
+	SetHUDAmmo();
+}
+```
+
+클라이언트 플레이어는 격발하면 SpendAmmo를 통해 HUD상에 남은 총알을 서버의 응답을 기다릴 필요 없이 즉시 화면에 업데이트 할 수 있게됐습니다.</br>
+대신 클라이언트가 갖고 있는 총알의 수가 옳은 지 검증하기 위해서 서버 환경에서 ClientUpdateAmmo RPC를 통해 확인할 수 있도록 했습니다.</BR></BR>
+
+코드의 전체적인 흐름은 클라이언트가 2발을 소모하여 8발이 남았다면 서버의 응답을 받기 전에 Ammo값을 계산하여 남은 총알이 8발이라는 것을 예측을 하고 예측한 탄알 만큼 Sequence를 더해줍니다.</br>
+서버에서는 소모된 1발씩 ClientUpdateAmmo RPC를 통해 클라이언트 환경에서 플레이어가 올바른 총알 수를 갖고 있는지 체크하며 서버는 지연시간으로 인해 플레이어가 9발을 갖고 있는 상황입니다.</br>
+클라이언트의 Ammo값이였던 8발을 서버의 Ammo값인 9발로 바꾸게 되어 다시 클라이언트의 HUD에는 남은 총알이 8발이 아닌 9발로 출력이 되어 탄을 소모했음에도 적용되지 않은 상태입니다.</BR>
+이를 해결하기 위해 Sequence값을 이용해 서버로부터 받을 응답 수가 몇 개 남았는지 체크하여 예측했던 8발로 다시 클라이언트의 Ammo값을 재조정해줬습니다.</br></br>
+
+```
+void UCombatComponent::Reload()
+{
+	if (CarriedAmmo > 0 && CombatState == ECombatState::ECS_Unoccupied && EquippedWeapon && !EquippedWeapon->IsFull())
+	{
+		ServerReload();
+		HandleReload();
+		bLocallyReloading = true;
+	}
+}
+
+void UCombatComponent::ServerReload_Implementation()
+{
+	CombatState = ECombatState::ECS_Reloading;
+	if (!Character->IsLocallyControlled()) HandleReload();
+}
+
+void UCombatComponent::OnRep_CombatState()
+{
+	switch (CombatState)
+	{
+	case ECombatState::ECS_Reloading:
+		if (Character && !Character->IsLocallyControlled()) HandleReload();
+		break;
+	}
+}
+```
+클라이언트가 Ammo값을 예측하면서 모든 총알을 소모하면 제때 Reload를 호출할 수 있게 됐습니다.</br>
+기존 Reload 함수에서는 ServerReload RPC를 통해 HandleReload를 호출해 서버의 응답이 와야 재장전 애니메이션이 출력됐습니다.</br>
+즉각적인 재장전 애니메이션을 출력하기 위해 RPC를 통하지 않고 바로 HandleReload를 호출했으며 재장전 중 사격이 되지 않도록 bLocallyReloading 변수로 조건을 추가했습니다.</br>
+서버 환경이나 다른 플레이어들한테는 RPC와 콜백 함수를 통해 애니메이션이 출력되고 자기 자신의 캐릭터는 재장전 동작을 반복하지 않기 위해 제외시켰습니다.</BR></br>
+
+### [점수 획득하기]
