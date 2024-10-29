@@ -557,3 +557,26 @@ MulticastReceiveMessage를 통해 모든 클라이언트는 자신의 채팅 위
 </br>
 
 ## 사용한 에셋
+<strong>1. Unreal Learning Kit</strong>
+![learning](https://github.com/user-attachments/assets/bce03a1c-cbde-4e5f-99bf-83364b1ebe82)
+</br>
+캐릭터와 맵 제작에 사용했습니다.</br></br>
+
+<strong>2. Mixamo</strong>
+![mixamo](https://github.com/user-attachments/assets/fd188d7d-4799-42ad-a1d2-aa9192ba4a52)
+</br>
+주요 애니메이션 모션을 가져왔습니다.</br></br>
+
+<strong>3. Stylized Egypt</strong>
+![egypt](https://github.com/user-attachments/assets/9c6c24d8-e110-420e-925f-01a34b0db8ff)
+단체전 맵에 사용했습니다.</br></br>
+
+<strong>4. Military Weapons Silver</strong>
+![weapon](https://github.com/user-attachments/assets/e30ac6c6-39f7-4684-b25c-7f212ccec541)
+</br>
+총기 메쉬 및 격발 애니메이션과 사운드를 사용했습니다.</br></br>
+
+<strong>5. Realistic Starter VFX Pack Vol 2</strong>
+![vfx](https://github.com/user-attachments/assets/14f8ea12-1e72-4b99-8ecc-a5cadd1f4855)
+</br>
+로켓탄 및 수류탄 폭발 및 연기에 필요한 VFX를 사용했습니다.
