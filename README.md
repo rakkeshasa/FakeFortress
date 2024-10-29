@@ -47,18 +47,24 @@ Steam의 매치메이킹 기능을 사용하여 서버의 IP를 알아올 필요
 <STRONG>세션 인터페이스(Session Interface)</STRONG>는 게임 세션을 생성, 관리, 파괴하는 것을 담당하며 세션 검색과 메치메이킹 기능 검색을 통해 특정 세션에 접속할 수 있도록 해줍니다.</br>
 
 ```
-// OnlineSubsystem 클래스
-const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
-if (!SessionInterface->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, *LastSessionSettings))
+void UMultiplayerSessionsSubsystem::CreateSession(int32 NumPublicConnections, FString MatchType)
 {
-  MultiplayerOnCreateSessionComplete.Broadcast(false);
+	SessionInterface->AddOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegate);
+	LastSessionSettings = MakeShareable(new FOnlineSessionSettings());
+
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (!SessionInterface->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, *LastSessionSettings))
+	{
+		SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
+		MultiplayerOnCreateSessionComplete.Broadcast(false);
+	}
+
 }
 
-// MainMenu 클래스
-UWorld* World = GetWorld();
-if (World)
+void UMultiplayerSessionsSubsystem::OnCreateSessionComplete(FName SessionName, bool bWasSuccessful)
 {
-	World->ServerTravel(PathToLobby);
+	SessionInterface->ClearOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegateHandle);
+	MultiplayerOnCreateSessionComplete.Broadcast(bWasSuccessful);
 }
 ```
 메인 메뉴에서 '서버 생성하기' 버튼을 누르면 세션 생성을 시도하게 됩니다.</br>
