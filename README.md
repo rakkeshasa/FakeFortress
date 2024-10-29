@@ -18,8 +18,7 @@ Unreal Engine과 Steam Session을 이용한 멀티플레이 FPS 게임
   * [시간 동기화](#시간-동기화)
   * [커스텀 MatchState 생성](#커스텀-MatchState-생성)
   * [채팅 시스템](#채팅-시스템)
-- [사용한 플러그인](#사용한-플러그인)
-- [Reference](#Reference)
+- [사용한 에셋](#사용한-에셋)
 
 ## 간단한 소개
 ![play](https://github.com/user-attachments/assets/f0393b7c-e9db-4e97-aae6-5efa71ab02f7)
@@ -108,6 +107,8 @@ if (PlayerController)
 Online Subsystem 클래스에서 JoinSession을 통해 세션에 성공적으로 들어가 true값을 메인 메뉴에게 브로드캐스트하면 MainMenu 클래스는 GerResolvedConnectString을 통해 클라이언트측 IP 주소를 얻어옵니다.</BR>
 클라이언트의 컨트롤러를 통해 클라이언트 IP주소를 가진채 ClientTravel을 통해 서버 플레이어의 세션에 참가하게 됩니다.</br></br>
 
+---
+
 ### [총기 줍기]
 
 ```
@@ -160,6 +161,8 @@ void UCombatComponent::OnRep_EquippedWeapon()
 장착된 총인 EquippedWeapon이 복제되면 콜백함수를 통해 클라이언트 환경에서도 플레이어에게 총기를 쥐어주게 되며, HUD도 장착한 총에 맞는 내용이 출력되도록 했습니다.</BR>
 복제 속성과 RPC를 통해 서버 환경에서 클라이언트 플레이어에게 총을 장착시키고 장착된 총을 복제시켜 다른 모든 클라이언트 환경에서도 해당 플레이어가 총을 장착한 모습이 보이도록 했습니다.</BR></BR>
 
+---
+
 ### [격발하기]
 
 ```
@@ -193,6 +196,8 @@ FireTimer는 총기가 가지고 있는 연사 딜레이 시간에 따라 bCanFi
 격발한 클라이언트를 제외한 나머지 플레이어들은 ServerFire RPC를 통해 서버 환경에서 멀티캐스트 RPC인 MulticastFire를 호출하고 서버와 클라이언트 모두의 환경에서 플레이어가 격발을 한 모습을 볼 수 있게 했습니다.</br>
 격발 후 데미지 처리는 Weapon클래스의 Fire함수가 담당하며 데미지는 서버 환경에서 총구위치와 HitTarget을 라인트레이싱한 후 플레이어한테 명중했다면 데미지를 적용시킵니다.</br>
 리슨 서버 유저면 라인트레이싱 결과를 토대로 바로 ApplyDamage를 실행해 피격자한테 데미지를 주지만, 클라이언트 유저면 ServerScoreRequest RPC를 통해 서버환경에서 서버측 재조정를 거쳐 라인 트레이싱을 진행하게 됩니다.</br></br>
+
+---
 
 ### [서버측 재조정]
 
@@ -348,6 +353,8 @@ PlayerController에서 매 틱마다 PlayerState를 통해 핑을 체크하고 H
 브로드 캐스트 해주는 HighPingDelegate 델리게이트는 무기를 장착할 때 바인딩해주고 무기를 바닥에 떨어뜨리면 해제시키도록 설계했습니다.</br>
 HighPingDelegate를 통해 콜백되는 함수에서는 bool값에 따라 무기 옵션인 bUseServerSideRewind의 값을 세팅해 현재 네트워크 환경에 따라 서버측 재조정을 사용할지 결정했습니다.</br></br>
 
+---
+
 ### [클라이언트측 예측]
 지연 시간이 긴 환경에서 총을 격발한 후에 HUD에서 남은 총알의 수가 클라이언트 환경에 맞게 줄었다가 아직 서버환경에서 복제되지 않아 늘어나는 문제가 있었습니다.</BR>
 또한 남은 총알의 수가 늦게 복제되면서 총알을 다 소모하면 Reload함수를 호출해야하는데 정상적으로 호출되지 않아 자동재장전이 되지 않았습니다.</br>
@@ -421,6 +428,8 @@ void UCombatComponent::OnRep_CombatState()
 즉각적인 재장전 애니메이션을 출력하기 위해 RPC를 통하지 않고 바로 HandleReload를 호출했으며 재장전 중 사격이 되지 않도록 bLocallyReloading 변수로 조건을 추가했습니다.</br>
 서버 환경이나 다른 플레이어들한테는 RPC와 콜백 함수를 통해 애니메이션이 출력되고 자기 자신의 캐릭터는 재장전 동작을 반복하지 않기 위해 제외시켰습니다.</BR></br>
 
+---
+
 ### [시간 동기화]
 게임에 참여한 플레이어들이 남은 시간을 동일하게 확인하기 위해서 서버 시간을 기준으로 했습니다.</BR>
 클라이언트는 5초마다 RPC를 통해 서버한테 시간을 알아와서 자신의 시간을 맞추게해서 모든 플레이어들이 동일한 시간을 확인할 수 있게했습니다.</BR>
@@ -450,6 +459,8 @@ float ABlasterPlayerController::GetServerTime()
 클라이언트가 서버의 시간을 확인하기 위해 자신이 요청을 보낸 시간과 함께 ServerRequestServerTime RPC를 호출해 서버 환경에서 현재 시간을 확인합니다.</BR>
 서버는 다시 클라이언트 측으로 클라이언트에게 요청 받은 시간과 현재 서버 시간을 RPC를 통해 보내주고 클라이언트는 응답받은 시간에서 요청한 시간을 빼 RTT(Round Trip Time)을 계산합니다.</br>
 서버가 자신의 시간을 클라이언트한테 보내는데 1/2 RTT만큼 시간이 소모됐으므로 클라이언트에서 서버의 시간은 서버 시간 + 1/2 RTT로 계산하여 클라이언트의 시간을 조정했습니다.</BR>
+
+---
 
 ### [커스텀 MatchState 생성]
 게임이 끝나고 바로 다음 라운드로 돌입하지 않고 잠시 대기시간을 가져 대기시간동안 승자를 알리고 알맞은 사운드가 들리게하기 위해 커스텀 MatchState인 Cooldown을 생성했습니다.</br>
@@ -495,6 +506,7 @@ CoolDown단계에 맞는 HUD가 출력될 수 있게 했습니다.</BR>
 PlayerController에 있는 OnMatchStateSet은 플레이어의 MatchState를 서버로부터 받은 MatchState값으로 바꾸고 HandleCooldown을 통해 다른 HUD 화면을 출력합니다.</BR>
 하지만 PlayerController::OnMatchStateSet은 게임 모드로부터 호출받아 서버환경이므로 리슨 서버 유저의 HUD만 바뀌므로 MatchState에 Replicated 속성을 추가해 클라이언트 환경인 콜백 함수에서 HandleCooldown을 호출할 수 있게 했습니다.</br></br>
 
+---
 
 ### [채팅 시스템]
 
@@ -543,3 +555,5 @@ SendMessage에서는 델리게이트를 통해 받은 Text를 ChatMessage 구조
 ServerSendMessage는 플레이어가 보낸 채팅 내용을 다른 모든 플레이어에게 보여주기 위해 서버에 접속한 모든 플레이어 컨트롤러에 접근해 MulticastReceiveMessage RPC를 호출합니다.</BR>
 MulticastReceiveMessage를 통해 모든 클라이언트는 자신의 채팅 위젯의 ChatBox에 다른 플레이어가 보낸 채팅을 볼 수 있게 했습니다.</br>
 </br>
+
+## 사용한 에셋
