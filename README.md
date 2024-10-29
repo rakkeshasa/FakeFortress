@@ -442,6 +442,51 @@ float ABlasterPlayerController::GetServerTime()
 서버는 다시 클라이언트 측으로 클라이언트에게 요청 받은 시간과 현재 서버 시간을 RPC를 통해 보내주고 클라이언트는 응답받은 시간에서 요청한 시간을 빼 RTT(Round Trip Time)을 계산합니다.</br>
 서버가 자신의 시간을 클라이언트한테 보내는데 1/2 RTT만큼 시간이 소모됐으므로 클라이언트에서 서버의 시간은 서버 시간 + 1/2 RTT로 계산하여 클라이언트의 시간을 조정했습니다.</BR>
 
+### [커스텀 MatchState 생성]
+게임이 끝나고 바로 다음 라운드로 돌입하지 않고 잠시 대기시간을 가져 대기시간동안 승자를 알리고 알맞은 사운드가 들리게하기 위해 커스텀 MatchState인 Cooldown을 생성했습니다.</br>
+게임 모드에서는 매 틱마다 남은 시간을 계산하여 시간이 끝나면 SetMathState를 통해 InProgress 단계에서 CoolDown 단계로 넘어가도록 했습니다.</br>
+
+```
+void ABlasterGameMode::OnMatchStateSet()
+{
+	Super::OnMatchStateSet();
+
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		ABlasterPlayerController* BlasterPlayer = Cast<ABlasterPlayerController>(*It);
+		BlasterPlayer->OnMatchStateSet(MatchState);
+	}
+}
+
+void ABlasterPlayerController::OnMatchStateSet(FName State, bool bTeamsMatch)
+{
+	MatchState = State;
+	if (MatchState == MatchState::Cooldown)
+	{
+		HandleCooldown();
+	}
+}
+
+void ABlasterPlayerController::HandleCooldown()
+{
+	BlasterHUD->CharacterOverlay->RemoveFromParent();
+
+	BlasterHUD->Announcement->SetVisibility(ESlateVisibility::Visible);
+	BlasterHUD->Announcement->AnnouncementText->SetText(FText::FromString("Next Round:"));
+	
+	TArray<ABlasterPlayerState*> TopPlayers = BlasterGameState->TopScoringPlayers;
+	FString InfoTextString = bShowTeamScores ? GetTeamsInfoText(BlasterGameState) : GetInfoText(TopPlayers);
+	BlasterHUD->Announcement->InfoText->SetText(FText::FromString(InfoTextString));
+}
+```
+MatchState의 값이 Cooldown 단계로 변경되면 MatchState가 복제가 되면서 GameMode에 있는 OnMatchStateSet이 호출됩니다.</br>
+OnMatchStateSet은 각 MatchState마다 Handle함수가 있어 단계가 시작할때마다 초기에 설정해야할 것을 처리해줍니다.</br>
+GameMode에 있는 함수를 오버라이딩하여 원래 존재하던 MatchState로 바뀔 시 GameMode의 코드를 이용하고 커스텀한 Cooldown 단계의 경우에는 오버라이딩한 함수에서 PlayerController를 통해 플레이어들한테
+CoolDown단계에 맞는 HUD가 출력될 수 있게 했습니다.</BR>
+PlayerController에 있는 OnMatchStateSet은 플레이어의 MatchState를 서버로부터 받은 MatchState값으로 바꾸고 HandleCooldown을 통해 다른 HUD 화면을 출력합니다.</BR>
+하지만 PlayerController::OnMatchStateSet은 게임 모드로부터 호출받아 서버환경이므로 리슨 서버 유저의 HUD만 바뀌므로 MatchState에 Replicated 속성을 추가해 클라이언트 환경인 콜백 함수에서 HandleCooldown을 호출할 수 있게 했습니다.</br></br>
+
+
 ### [채팅 시스템]
 
 ```
@@ -489,4 +534,3 @@ SendMessage에서는 델리게이트를 통해 받은 Text를 ChatMessage 구조
 ServerSendMessage는 플레이어가 보낸 채팅 내용을 다른 모든 플레이어에게 보여주기 위해 서버에 접속한 모든 플레이어 컨트롤러에 접근해 MulticastReceiveMessage RPC를 호출합니다.</BR>
 MulticastReceiveMessage를 통해 모든 클라이언트는 자신의 채팅 위젯의 ChatBox에 다른 플레이어가 보낸 채팅을 볼 수 있게 했습니다.</br>
 </br>
-
