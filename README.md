@@ -412,4 +412,81 @@ void UCombatComponent::OnRep_CombatState()
 즉각적인 재장전 애니메이션을 출력하기 위해 RPC를 통하지 않고 바로 HandleReload를 호출했으며 재장전 중 사격이 되지 않도록 bLocallyReloading 변수로 조건을 추가했습니다.</br>
 서버 환경이나 다른 플레이어들한테는 RPC와 콜백 함수를 통해 애니메이션이 출력되고 자기 자신의 캐릭터는 재장전 동작을 반복하지 않기 위해 제외시켰습니다.</BR></br>
 
-### [점수 획득하기]
+### [시간 동기화]
+게임에 참여한 플레이어들이 남은 시간을 동일하게 확인하기 위해서 서버 시간을 기준으로 했습니다.</BR>
+클라이언트는 5초마다 RPC를 통해 서버한테 시간을 알아와서 자신의 시간을 맞추게해서 모든 플레이어들이 동일한 시간을 확인할 수 있게했습니다.</BR>
+
+```
+void ABlasterPlayerController::ServerRequestServerTime_Implementation(float TimeOfClientRequest)
+{
+	float ServerTimeOfReceipt = GetWorld()->GetTimeSeconds();
+	
+	ClientReportServerTime(TimeOfClientRequest, ServerTimeOfReceipt);
+}
+
+void ABlasterPlayerController::ClientReportServerTime_Implementation(float TimeOfClientRequest, float TimeServerReceivedClientRequest)
+{
+	float RoundTripTime = GetWorld()->GetTimeSeconds() - TimeOfClientRequest;
+	float CurrentServerTime = TimeServerReceivedClientRequest + (0.5f * RoundTripTime);
+	
+	ClientServerDelta = CurrentServerTime - GetWorld()->GetTimeSeconds();
+}
+
+float ABlasterPlayerController::GetServerTime()
+{
+	return GetWorld()->GetTimeSeconds() + ClientServerDelta;
+}
+```
+
+클라이언트가 서버의 시간을 확인하기 위해 자신이 요청을 보낸 시간과 함께 ServerRequestServerTime RPC를 호출해 서버 환경에서 현재 시간을 확인합니다.</BR>
+서버는 다시 클라이언트 측으로 클라이언트에게 요청 받은 시간과 현재 서버 시간을 RPC를 통해 보내주고 클라이언트는 응답받은 시간에서 요청한 시간을 빼 RTT(Round Trip Time)을 계산합니다.</br>
+서버가 자신의 시간을 클라이언트한테 보내는데 1/2 RTT만큼 시간이 소모됐으므로 클라이언트에서 서버의 시간은 서버 시간 + 1/2 RTT로 계산하여 클라이언트의 시간을 조정했습니다.</BR>
+
+### [채팅 시스템]
+
+```
+void UChatComponent::SendMessage(const FText& Text, ETextCommit::Type CommitMethod)
+{
+	const FString Message = ChatBox->GetChatEntryBox()->GetText().ToString();
+	FString PlayerName = *Cast<ABlasterPlayerController>(GetOwner())->GetPlayerState<ABlasterPlayerState>()->GetPlayerName();
+
+	FChatMessage ChatMessage;
+	ChatMessage.Sender = PlayerName;
+	ChatMessage.Message = Message;
+
+	if (!ChatMessage.Message.IsEmpty())
+	{
+		ServerSendMessage(ChatMessage, ChatColor);
+	}
+}
+
+void UChatComponent::ServerSendMessage_Implementation(const FChatMessage& ChatMessage, FLinearColor TextColor)
+{
+	TArray<AActor*> PlayerControllers;
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), APlayerController::StaticClass(), PlayerControllers);
+
+	for (AActor* PlayerController : PlayerControllers)
+	{
+		ABlasterPlayerController* BlasterController = Cast<ABlasterPlayerController>(PlayerController);
+		if (BlasterController)
+		{
+			BlasterController->GetChatComponent()->MulticastReceiveMessage(ChatMessage, TextColor);
+		}
+	}
+}
+
+void UChatComponent::MulticastReceiveMessage_Implementation(const FChatMessage& ChatMessage, FLinearColor TextColor)
+{
+	if (ChatBox && Cast<ABlasterPlayerController>(GetOwner())->IsLocalController())
+	{
+		ChatBox->AddChatMessage(ChatMessage, TextColor);
+	}
+}
+```
+
+채팅 위젯의 TextBox에 글을 적고 엔터를 누르면 OnTextCommitted 델리게이트를 통해 SendMessage가 호출됩니다.</br>
+SendMessage에서는 델리게이트를 통해 받은 Text를 ChatMessage 구조체의 Message변수에 저장하고 현재 플레이어의 이름을 Sender 변수에 저장해 ChatMessage를 ServerSendMessage RPC에게 넘깁니다.</BR>
+ServerSendMessage는 플레이어가 보낸 채팅 내용을 다른 모든 플레이어에게 보여주기 위해 서버에 접속한 모든 플레이어 컨트롤러에 접근해 MulticastReceiveMessage RPC를 호출합니다.</BR>
+MulticastReceiveMessage를 통해 모든 클라이언트는 자신의 채팅 위젯의 ChatBox에 다른 플레이어가 보낸 채팅을 볼 수 있게 했습니다.</br>
+</br>
+
