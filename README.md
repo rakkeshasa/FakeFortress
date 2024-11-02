@@ -74,24 +74,30 @@ CreateSession함수에 서버 플레이어의 IP, 세션 이름, 세션 세팅�
 메인 메뉴 위젯은 세션 생성 성공의 의미로 true값을 받으면 ServerTravel 함수를 통해 서버 유저를 게임 레벨로 이동시키게 됩니다.</br></br>
 
 ```
-// OnlineSubsystem 클래스
-FindSessionsCompleteDelegateHandle = SessionInterface->AddOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegate);
-
-const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
-if (!SessionInterface->FindSessions(*LocalPlayer->GetPreferredUniqueNetId(), LastSessionSearch.ToSharedRef()))
+void UMultiplayerSessionsSubsystem::FindSession(int32 MaxSearchResults)
 {
-  MultiplayerOnFindSessionsComplete.Broadcast(TArray<FOnlineSessionSearchResult>(), false);
+	SessionInterface->AddOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegate);
+	LastSessionSearch = MakeShareable(new FOnlineSessionSearch());
+
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (!SessionInterface->FindSessions(*LocalPlayer->GetPreferredUniqueNetId(), LastSessionSearch.ToSharedRef()))
+	{
+		SessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegateHandle);
+		MultiplayerOnFindSessionsComplete.Broadcast(TArray<FOnlineSessionSearchResult>(), false);
+	}
 }
 
-// MainMenu 클래스
-for (auto Result : SessionResults)
+void UMenu::OnFindSessions(const TArray<FOnlineSessionSearchResult>& SessionResults, bool bWasSuccessful)
 {
-	FString SettingsValue;
-	Result.Session.SessionSettings.Get(FName("MatchType"), SettingsValue);
-	if (SettingsValue == MatchType)
+	for (auto Result : SessionResults)
 	{
-		MultiplayerSessionsSubsystem->JoinSession(Result);
-		return;
+		FString SettingsValue;
+		Result.Session.SessionSettings.Get(FName("MatchType"), SettingsValue);
+		if (SettingsValue == MatchType)
+		{
+			MultiplayerSessionsSubsystem->JoinSession(Result);
+			return;
+		}
 	}
 }
 ```
@@ -101,13 +107,30 @@ for (auto Result : SessionResults)
 메인 메뉴 위젯은 찾은 세션들과 true값을 받으면 세션들을 순회하며 게임모드인(개인전, 단체전, 탈취전) 'MatchType'의 값이 서버와 같다면 세션 접속을 시도합니다.</br>
 
 ```
-FString Address;
-SessionInterface->GetResolvedConnectString(NAME_GameSession, Address);
-
-APlayerController* PlayerController = GetGameInstance()->GetFirstLocalPlayerController();
-if (PlayerController)
+void UMultiplayerSessionsSubsystem::JoinSession(const FOnlineSessionSearchResult& SessionResult)
 {
-	PlayerController->ClientTravel(Address, ETravelType::TRAVEL_Absolute);
+	SessionInterface->AddOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegate);
+
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	if (!SessionInterface->JoinSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, SessionResult))
+	{
+		SessionInterface->ClearOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegateHandle);
+		MultiplayerOnJoinSessionComplete.Broadcast(EOnJoinSessionCompleteResult::UnknownError);
+	}
+}
+
+void UMenu::OnJoinSession(EOnJoinSessionCompleteResult::Type Result)
+{
+	IOnlineSubsystem* Subsystem = IOnlineSubsystem::Get();
+	IOnlineSessionPtr SessionInterface = Subsystem->GetSessionInterface();
+	if (SessionInterface.IsValid())
+	{
+		FString Address;
+		SessionInterface->GetResolvedConnectString(NAME_GameSession, Address);
+
+		APlayerController* PlayerController = GetGameInstance()->GetFirstLocalPlayerController();
+		PlayerController->ClientTravel(Address, ETravelType::TRAVEL_Absolute);
+	}
 }
 ```
 Online Subsystem 클래스에서 JoinSession을 통해 세션에 성공적으로 들어가 true값을 메인 메뉴에게 브로드캐스트하면 MainMenu 클래스는 GerResolvedConnectString을 통해 클라이언트측 IP 주소를 얻어옵니다.</BR>
@@ -120,32 +143,24 @@ Online Subsystem 클래스에서 JoinSession을 통해 세션에 성공적으로
 ```
 void ABlasterCharacter::EquipButtonPressed()
 {
-		if (Combat->CombatState == ECombatState::ECS_Unoccupied) ServerEquipButtonPressed();
+	ServerEquipButtonPressed();
 }
 
 void ABlasterCharacter::ServerEquipButtonPressed_Implementation()
 {
-		if (OverlappingWeapon)
-		{
-			Combat->EquipWeapon(OverlappingWeapon);
-		}
+	Combat->EquipWeapon(OverlappingWeapon);
 }
 
 void UCombatComponent::EquipWeapon(AWeapon* WeaponToEquip)
 {
-  EquippedWeapon = WeaponToEquip;
+  	EquippedWeapon = WeaponToEquip;
 	EquippedWeapon->SetOwner(Character);
 	EquippedWeapon->SetWeaponState(EWeaponState::EWS_Equipped);
 	
 	AttachActorToRightHand(EquippedWeapon);
-
 	EquippedWeapon->SetHUDAmmo();
-	EquippedWeapon->SetHUDGun();
-	UpdateCarriedAmmo();
 	PlayEquipWeaponSound(WeaponToEquip);
-	ReloadEmptyWeapon();
 }
-
 ```
 
 플레이어가 땅에 떨어진 총을 파밍하면 서버 환경에서 해당 플레이어에게 총을 장착시켜주고 다른 클라이언트에게 해당 내용을 복제해 전달해줍니다.</br>
@@ -156,12 +171,12 @@ EquippedWeapon에는 Relicated 속성을 부여해 서버 환경에서 장착 �
 ```
 void UCombatComponent::OnRep_EquippedWeapon()
 {
-		EquippedWeapon->SetWeaponState(EWeaponState::EWS_Equipped);
-		AttachActorToRightHand(EquippedWeapon);
+	EquippedWeapon->SetWeaponState(EWeaponState::EWS_Equipped);
+	AttachActorToRightHand(EquippedWeapon);
 
-		PlayEquipWeaponSound(EquippedWeapon);
-		EquippedWeapon->SetHUDAmmo();
-		EquippedWeapon->SetHUDGun();
+	PlayEquipWeaponSound(EquippedWeapon);
+	EquippedWeapon->SetHUDAmmo();
+	EquippedWeapon->SetHUDGun();
 }
 ```
 장착된 총인 EquippedWeapon이 복제되면 콜백함수를 통해 클라이언트 환경에서도 플레이어에게 총기를 쥐어주게 되며, HUD도 장착한 총에 맞는 내용이 출력되도록 했습니다.</BR>
@@ -172,18 +187,20 @@ void UCombatComponent::OnRep_EquippedWeapon()
 ### [격발하기]
 
 ```
-if (CanFire())
+void UCombatComponent::Fire()
 {
-  bCanFire = false;
-
-  FHitResult HitResult;
-  TraceUnderCrosshairs(HitResult);
-  HitTarget = HitResult.ImpactPoint;
-
-  if (!Character->HasAuthority()) LocalFire(HitTarget);
-  ServerFire(HitTarget, EquippedWeapon->FireDelay);
-
-  StartFireTimer();
+	if (CanFire())
+	{
+		  bCanFire = false;
+		
+		  FHitResult HitResult;
+		  TraceUnderCrosshairs(HitResult);
+		  HitTarget = HitResult.ImpactPoint;
+		
+		  if (!Character->HasAuthority()) LocalFire(HitTarget);
+		  ServerFire(HitTarget, EquippedWeapon->FireDelay);
+		  StartFireTimer();
+	}
 }
 
 void UCombatComponent::LocalFire(const FVector_NetQuantize& TraceHitTarget)
@@ -287,6 +304,17 @@ for (auto& HitBoxPair : HitCharacter->HitCollisionBoxes)
 	HitBoxPair.Value->SetWorldLocation(Package.HitBoxInfo[HitBoxPair.Key].Location);
 	HitBoxPair.Value->SetWorldRotation(Package.HitBoxInfo[HitBoxPair.Key].Rotation);
 }
+
+UBoxComponent* HeadBox = HitCharacter->HitCollisionBoxes[FName("head")];
+HeadBox->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+HeadBox->SetCollisionResponseToChannel(ECC_HitBox, ECollisionResponse::ECR_Block);
+
+World->LineTraceSingleByChannel(
+	ConfirmHitResult,
+	TraceStart,
+	TraceEnd,
+	ECC_HitBox
+);
 ```
 
 피격된 시간대의 FFramePackage를 구한 후에는 ConfirmHit 함수를 호출해 피격자의 히트박스에 맞았는지 라인트레이싱을 진행합니다.</br>
@@ -341,17 +369,33 @@ if문의 ConfirmHitResult.bBlockingHit조건에 만족한다면 머리 히트박
 서버측 재조정을 통해 얻은 결과값을 FServerSideRewindReuslt을 통해 서버는 ApplyDamage를 실행하고 헤드샷이면 헤드샷 데미지를, 그게 아니라면 일반 데미지를 ApplyDamage에 적용했습니다.</br></br>
 
 ```
-if (PlayerState)
+void ABlasterPlayerController::CheckPing(float DeltaTime)
 {
-	if (PlayerState->GetPing() * 4 > HighPingThreshold)
+	HighPingRunningTime += DeltaTime;
+	
+	if (HighPingRunningTime > CheckPingFrequency)
 	{
-		HighPingWarning();
-		ServerReportPingStatus(true);
+		if (PlayerState->GetPing() * 4 > HighPingThreshold)
+		{
+			HighPingWarning();
+			ServerReportPingStatus(true);
+		}
+		else
+		{
+			ServerReportPingStatus(false);
+		}
+		HighPingRunningTime = 0.f;
 	}
-	else
-	{
-		ServerReportPingStatus(false);
-	}
+}
+
+void ABlasterPlayerController::ServerReportPingStatus_Implementation(bool bHighPing)
+{
+	HighPingDelegate.Broadcast(bHighPing);
+}
+
+void AWeapon::OnPingTooHigh(bool bPingTooHigh)
+{
+	bUseServerSideRewind = !bPingTooHigh;
 }
 ```
 높은 핑으로 인해 지연이 너무 오래 될시 서버측 재조정은 공격자에게 좋은 플레이 경험을 주지 않기 때문에 일정 핑보다 높다면 서버측 재조정을 사용하지 않게 해주도록 했습니다.</BR>
@@ -405,7 +449,7 @@ void AWeapon::ClientUpdateAmmo_Implementation(int32 ServerAmmo)
 ```
 void UCombatComponent::Reload()
 {
-	if (CarriedAmmo > 0 && CombatState == ECombatState::ECS_Unoccupied && EquippedWeapon && !EquippedWeapon->IsFull())
+	if (CarriedAmmo > 0 && CombatState == ECombatState::ECS_Unoccupied && !EquippedWeapon->IsFull())
 	{
 		ServerReload();
 		HandleReload();
@@ -448,7 +492,8 @@ void ABlasterPlayerController::ServerRequestServerTime_Implementation(float Time
 	ClientReportServerTime(TimeOfClientRequest, ServerTimeOfReceipt);
 }
 
-void ABlasterPlayerController::ClientReportServerTime_Implementation(float TimeOfClientRequest, float TimeServerReceivedClientRequest)
+void ABlasterPlayerController::ClientReportServerTime_Implementation(float TimeOfClientRequest,
+	float TimeServerReceivedClientRequest)
 {
 	float RoundTripTime = GetWorld()->GetTimeSeconds() - TimeOfClientRequest;
 	float CurrentServerTime = TimeServerReceivedClientRequest + (0.5f * RoundTripTime);
